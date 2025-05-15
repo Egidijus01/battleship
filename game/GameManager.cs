@@ -1,17 +1,15 @@
-using System;
 using ShipBattle.Roles;
-using System.Collections.Generic;
+using ShipBattle.Utils;
+using ShipBattle.Exceptions;
 
-namespace ShipBattle
+namespace ShipBattle.Core
 {
     public class GameManager
     {
         private IRules _rules;
         private ILogger _logger;
-        private Player _player1;
-        private Player _player2;
-        private Player _currentPlayer;
-        private Player _opponentPlayer;
+        private List<Player> _players;
+        private int _currentPlayerIndex;
         private bool _gameOver;
 
         private Stack<MoveRecord> _moveHistory = new Stack<MoveRecord>();
@@ -25,6 +23,8 @@ namespace ShipBattle
         {
             _rules = new Rules();
             _logger = new Logger();
+            _players = new List<Player>();
+            _currentPlayerIndex = 0;
         }
 
         public void StartGame()
@@ -35,27 +35,20 @@ namespace ShipBattle
             Console.Clear();
             DisplayRulesSummary();
 
-            _player1 = CreatePlayer("pirmojo");
-            _player2 = CreatePlayer("antrojo");
+            _players.Add(CreatePlayer("pirmojo"));
+            _players.Add(CreatePlayer("antrojo"));
 
             AssignRolesAndRoleInstances();
 
+            // Atsitiktinis pradžios žaidėjas
             Random rand = new Random();
-            if (rand.Next(2) == 0)
-            {
-                _currentPlayer = _player1;
-                _opponentPlayer = _player2;
-            }
-            else
-            {
-                _currentPlayer = _player2;
-                _opponentPlayer = _player1;
-            }
+            _currentPlayerIndex = rand.Next(2);
 
-            Console.WriteLine($"Pirmas pradeda: {_currentPlayer.Name}");
+            Console.WriteLine($"Pirmas pradeda: {_players[_currentPlayerIndex].Name}");
+
             PlaceShipsForPlayers();
 
-            _logger.LogGameStart(_player1, _player2, _rules);
+            _logger.LogGameStart(_players[0], _players[1], _rules);
 
             while (!_gameOver)
             {
@@ -65,12 +58,11 @@ namespace ShipBattle
 
         private void AssignRolesAndRoleInstances()
         {
-            // Pvz. priskiriame role enum ir pagal tai sukurti RoleInstance
-            _player1.Role = PlayerRole.Bomber;
-            _player1.RoleInstance = RoleFactory.CreateRole(_player1.Role);
+            _players[0].Role = PlayerRole.Bomber;
+            _players[0].RoleInstance = RoleFactory.CreateRole(_players[0].Role);
 
-            _player2.Role = PlayerRole.Spy;
-            _player2.RoleInstance = RoleFactory.CreateRole(_player2.Role);
+            _players[1].Role = PlayerRole.Spy;
+            _players[1].RoleInstance = RoleFactory.CreateRole(_players[1].Role);
         }
 
         private void DisplayRulesSummary()
@@ -89,9 +81,11 @@ namespace ShipBattle
 
         private void PlaceShipsForPlayers()
         {
-            ExecuteShipPlacement(_player1);
-            Console.Clear();
-            ExecuteShipPlacement(_player2);
+            foreach (var player in _players)
+            {
+                ExecuteShipPlacement(player);
+                Console.Clear();
+            }
         }
 
         private void ExecuteShipPlacement(Player player)
@@ -123,12 +117,28 @@ namespace ShipBattle
                 var (pos, dir) = GetShipPlacementDetails();
                 try
                 {
-                    placed = player.TryPlaceShip(new Ship(length, pos, dir));
-                    if (!placed) Console.WriteLine("Negalima pozicija. Bandykite dar kartą.");
+                    Console.Write("Įveskite koordinates (pvz., A1): ");
+                    string input = Console.ReadLine().ToUpper();
+                    if (string.IsNullOrWhiteSpace(input))
+                        throw new EgidijusGagelaException("Įvestis negali būti tuščia", "Klaida įvedant laivo poziciją.");
+
+                    Position position = Position.FromString(input);
+
+                    Console.Write("Įveskite kryptį (H/V): ");
+                    string direction = Console.ReadLine().ToUpper();
+                    if (direction != "H" && direction != "V")
+                        throw new EgidijusGagelaException("Neteisinga kryptis (turi būti H arba V)", $"Įvesta: {direction}");
+
+                    return (position, direction == "H" ? ShipDirection.Horizontal : ShipDirection.Vertical);
+                }
+                catch (EgidijusGagelaException ex)
+                {
+                    Console.WriteLine($"Klaida: {ex.Message}");
+                    Console.WriteLine("Bandykite dar kartą.");
                 }
                 catch (FormatException)
                 {
-                    HandleInvalidInput("Neteisingas koordinačių formatas");
+                    Console.WriteLine("Netinkamas koordinačių formatas. Bandykite dar kartą.");
                 }
             }
         }
@@ -159,10 +169,13 @@ namespace ShipBattle
         private void GameCycle()
         {
             Console.Clear();
-            Console.WriteLine($"{_currentPlayer.Name} ėjimas (Rolė: {_currentPlayer.Role})\n");
-            _currentPlayer.PrintOpponentBoard();
-            _currentPlayer.PrintOwnBoard();
-            Console.WriteLine($"\nRadarai: {_currentPlayer.RadarBombs}, Sprogstamosios bangos: {_currentPlayer.ExplosiveBombs}");
+            Player currentPlayer = _players[_currentPlayerIndex];
+            Player opponentPlayer = _players[(_currentPlayerIndex + 1) % 2];
+
+            Console.WriteLine($"{currentPlayer.Name} ėjimas (Rolė: {currentPlayer.Role})\n");
+            currentPlayer.PrintOpponentBoard();
+            currentPlayer.PrintOwnBoard();
+            Console.WriteLine($"\nRadarai: {currentPlayer.RadarBombs}, Sprogstamosios bangos: {currentPlayer.ExplosiveBombs}");
 
             _shotsThisTurn = 0;
             _doubleShotAllowed = false;
@@ -170,11 +183,11 @@ namespace ShipBattle
             bool maintainTurn = false;
             do
             {
-                maintainTurn = ExecutePlayerAction();
+                maintainTurn = ExecutePlayerAction(currentPlayer, opponentPlayer);
 
-                if (_opponentPlayer.AreAllShipsSunk())
+                if (opponentPlayer.AreAllShipsSunk())
                 {
-                    EndGame();
+                    EndGame(currentPlayer);
                     return;
                 }
 
@@ -186,13 +199,14 @@ namespace ShipBattle
             }
             while (maintainTurn && _doubleShotAllowed && _shotsThisTurn < 2);
 
-            if (!maintainTurn) SwitchPlayers();
+            if (!maintainTurn)
+                SwitchPlayers();
 
             Console.WriteLine("Paspauskite bet kurį klavišą...");
             Console.ReadKey();
         }
 
-        private bool ExecutePlayerAction()
+        private bool ExecutePlayerAction(Player currentPlayer, Player opponentPlayer)
         {
             while (true)
             {
@@ -202,10 +216,10 @@ namespace ShipBattle
                 switch (choice)
                 {
                     case "1":
-                        return ExecutePositionAction(MakeShot);
+                        return ExecutePositionAction(currentPlayer, opponentPlayer, MakeShot);
 
                     case "2":
-                        UseSpecialAbility();
+                        UseSpecialAbility(currentPlayer, opponentPlayer);
                         return false;
 
                     default:
@@ -215,7 +229,7 @@ namespace ShipBattle
             }
         }
 
-        private bool ExecutePositionAction(Func<Position, bool> action)
+        private bool ExecutePositionAction(Player currentPlayer, Player opponentPlayer, Func<Player, Player, Position, bool> action)
         {
             while (true)
             {
@@ -223,7 +237,7 @@ namespace ShipBattle
                 {
                     Console.Write("Įveskite koordinates: ");
                     Position position = Position.FromString(Console.ReadLine().ToUpper());
-                    return action(position);
+                    return action(currentPlayer, opponentPlayer, position);
                 }
                 catch (FormatException)
                 {
@@ -236,13 +250,13 @@ namespace ShipBattle
             }
         }
 
-        private bool MakeShot(Position position)
+        private bool MakeShot(Player shooter, Player target, Position position)
         {
-            ShotResult result = _currentPlayer.Shoot(position, _opponentPlayer.OwnBoard);
-            _logger.LogShot(_currentPlayer.Name, position.ToString(), result);
+            ShotResult result = shooter.Shoot(position, target.OwnBoard);
+            _logger.LogShot(shooter.Name, position.ToString(), result);
             TotalShots++;
 
-            _moveHistory.Push(new MoveRecord(_currentPlayer, _opponentPlayer, position, result));
+            _moveHistory.Push(new MoveRecord(shooter, target, position, result));
 
             Console.WriteLine(result switch
             {
@@ -254,11 +268,11 @@ namespace ShipBattle
             return result == ShotResult.Hit || result == ShotResult.Sunk;
         }
 
-        private void UseSpecialAbility()
+        private void UseSpecialAbility(Player currentPlayer, Player opponentPlayer)
         {
-            if (_currentPlayer == null) return;
+            if (currentPlayer == null) return;
 
-            if (_currentPlayer.Role == PlayerRole.FastShip)
+            if (currentPlayer.Role == PlayerRole.FastShip)
             {
                 if (_doubleShotAllowed)
                 {
@@ -267,7 +281,7 @@ namespace ShipBattle
                 }
                 _doubleShotAllowed = true;
                 Console.WriteLine("Greitas laivas leidžia šauti du kartus šį ėjimą!");
-                _currentPlayer.RoleInstance.UseAbility(_currentPlayer, _opponentPlayer, this);
+                currentPlayer.RoleInstance.UseAbility(currentPlayer, opponentPlayer, this);
                 return;
             }
 
@@ -285,45 +299,45 @@ namespace ShipBattle
             switch (choice)
             {
                 case "1":
-                    ExecutePositionAction(pos =>
+                    ExecutePositionAction(currentPlayer, opponentPlayer, (cur, opp, pos) =>
                     {
-                        _currentPlayer.UseRadar(pos, _opponentPlayer.OwnBoard);
-                        _logger.LogRadarUse(_currentPlayer.Name, pos.ToString());
+                        cur.UseRadar(pos, opp.OwnBoard);
+                        _logger.LogRadarUse(cur.Name, pos.ToString());
                         Console.WriteLine("Radaras panaudotas.");
                         return false;
                     });
                     break;
 
                 case "2":
-                    ExecutePositionAction(pos =>
+                    ExecutePositionAction(currentPlayer, opponentPlayer, (cur, opp, pos) =>
                     {
-                        bool hit = _currentPlayer.UseExplosiveBomb(pos, _opponentPlayer.OwnBoard);
-                        _logger.LogExplosiveBombUse(_currentPlayer.Name, pos.ToString(), hit);
+                        bool hit = cur.UseExplosiveBomb(pos, opp.OwnBoard);
+                        _logger.LogExplosiveBombUse(cur.Name, pos.ToString(), hit);
                         Console.WriteLine(hit ? "Pataikėte!" : "Nepataikėte!");
                         return hit;
                     });
                     break;
 
                 case "3":
-                    ExecutePositionAction(pos =>
+                    ExecutePositionAction(currentPlayer, opponentPlayer, (cur, opp, pos) =>
                     {
-                        _currentPlayer.RoleInstance.UseAbility(_currentPlayer, _opponentPlayer, this, pos);
+                        cur.RoleInstance.UseAbility(cur, opp, this, pos);
                         Console.WriteLine("Šnipas panaudojo šnipinėjimo įgūdžius!");
                         return false;
                     });
                     break;
 
                 case "4":
-                    _currentPlayer.RoleInstance.UseAbility(_currentPlayer, _opponentPlayer, this);
+                    currentPlayer.RoleInstance.UseAbility(currentPlayer, opponentPlayer, this);
                     Console.WriteLine("Inžinierius sutvirtino vieną laivą!");
                     break;
 
                 case "5":
-                    _currentPlayer.RoleInstance.UseAbility(_currentPlayer, _opponentPlayer, this);
+                    currentPlayer.RoleInstance.UseAbility(currentPlayer, opponentPlayer, this);
                     break;
 
                 case "6":
-                    _currentPlayer.RoleInstance.UseAbility(_currentPlayer, _opponentPlayer, this);
+                    currentPlayer.RoleInstance.UseAbility(currentPlayer, opponentPlayer, this);
                     Console.WriteLine("Medikas pataisė laivą!");
                     break;
 
@@ -354,21 +368,24 @@ namespace ShipBattle
             Console.WriteLine("Paskutinis ėjimas atšauktas.");
 
             // Jei reikia, pakeisti žaidėjo einamumą
-            if (_currentPlayer != player)
+            if (_players[_currentPlayerIndex] != player)
                 SwitchPlayers();
         }
 
-        private void EndGame()
+        private void EndGame(Player winner)
         {
             _gameOver = true;
             Console.Clear();
-            Console.WriteLine($"Žaidimas baigtas! {_currentPlayer.Name} laimėjo!");
+            Console.WriteLine($"Žaidimas baigtas! {winner.Name} laimėjo!");
             Console.WriteLine($"Iš viso atlikta šūvių: {TotalShots}");
-            _logger.LogGameEnd(_currentPlayer.Name);
+            _logger.LogGameEnd(winner.Name);
             _logger.Dispose();
         }
 
-        private void SwitchPlayers() => (_currentPlayer, _opponentPlayer) = (_opponentPlayer, _currentPlayer);
+        private void SwitchPlayers()
+        {
+            _currentPlayerIndex = (_currentPlayerIndex + 1) % 2;
+        }
 
         private void HandleInvalidInput(string message)
         {

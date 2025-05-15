@@ -1,4 +1,6 @@
-namespace ShipBattle
+using ShipBattle.Core;
+
+namespace ShipBattle.Core
 {
     class Program
     {

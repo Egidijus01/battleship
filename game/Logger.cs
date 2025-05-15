@@ -1,4 +1,4 @@
-namespace ShipBattle
+namespace ShipBattle.Utils
 {
     public interface ILogger : IDisposable
     {

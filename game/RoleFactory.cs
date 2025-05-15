@@ -1,4 +1,4 @@
-namespace ShipBattle
+namespace ShipBattle.Roles
 {
     public static class RoleFactory
     {

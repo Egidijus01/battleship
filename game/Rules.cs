@@ -1,4 +1,4 @@
-namespace ShipBattle
+namespace ShipBattle.Core
 {
     public interface IRules
     {

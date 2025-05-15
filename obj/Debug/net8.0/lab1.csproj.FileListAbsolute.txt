@@ -32,3 +32,4 @@
 /home/egidijus/Developement/lab1/bin/Debug/net8.0/System.Text.Encodings.Web.dll
 /home/egidijus/Developement/lab1/bin/Debug/net8.0/System.Text.Json.dll
 /home/egidijus/Developement/lab1/bin/Debug/net8.0/runtimes/browser/lib/net8.0/System.Text.Encodings.Web.dll
+/home/egidijus/Developement/lab1/obj/Debug/net8.0/lab1.sourcelink.json

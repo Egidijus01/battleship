@@ -1,4 +1,4 @@
-namespace ShipBattle
+namespace ShipBattle.Core
 {
     public class Position : IEquatable<Position>
     {
